@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use crate::camera::Camera;
 use crate::device::info::DeviceInfo;
-use crate::device::selectors::Selector;
+use crate::device::selectors::{Selector, control};
 use crate::device::transport::{Control, ControlInfo, Transport, XuQuery};
 use crate::device::xu::{ExtensionUnit, Guid, UnitKind};
 
@@ -249,6 +249,16 @@ impl Transport for FakeCamera {
         }
         for &(id, value) in controls {
             state.controls.get_mut(&id).unwrap().1 = value;
+            if id == Control::Zoom {
+                // Real cameras disable Smart Composition when zoom is set by hand.
+                let framing = control::FRAMING;
+                if let Some(unit) = state.units.iter().find(|u| u.kind == Some(framing.unit)) {
+                    let key = (unit.id, framing.id);
+                    if let Some(payload) = state.selectors.get_mut(&key) {
+                        payload.copy_from_slice(&[4]);
+                    }
+                }
+            }
         }
         state.writes.push(controls.to_vec());
         Ok(())

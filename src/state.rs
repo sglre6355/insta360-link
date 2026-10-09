@@ -158,13 +158,15 @@ impl Camera {
     /// resulting mode controls the gimbal itself, such as [`CameraMode::Tracking`],
     /// [`CameraMode::Overhead`], or [`CameraMode::AutoFraming`].
     ///
+    /// Framing is applied after zoom because manually adjusting zoom switches
+    /// the camera to [`Framing::Manual`]. With AI Zoom enabled, selecting
+    /// [`Framing::Head`], [`Framing::HalfBody`], or [`Framing::WholeBody`] lets
+    /// the camera adjust zoom automatically.
+    ///
     /// Stops at the first setting the camera rejects.
     pub fn apply(&self, state: &State) -> Result<()> {
         if let Some(mode) = state.mode {
             self.set_mode(mode)?;
-        }
-        if let Some(framing) = state.tracking.framing {
-            self.set_framing(framing)?;
         }
         if let Some(speed) = state.tracking.speed {
             self.set_tracking_speed(speed)?;
@@ -177,6 +179,9 @@ impl Camera {
         self.set_image(&state.image)?;
         if let Some(zoom) = state.gimbal.zoom {
             self.set_zoom(zoom)?;
+        }
+        if let Some(framing) = state.tracking.framing {
+            self.set_framing(framing)?;
         }
 
         if state.gimbal.pan.is_none() && state.gimbal.tilt.is_none() {
@@ -288,6 +293,25 @@ mod tests {
         };
         fake.camera().apply(&state).unwrap();
         assert_eq!(fake.writes(), [[(Control::Zoom, 200)]]);
+    }
+
+    #[test]
+    fn restores_framing_with_a_saved_zoom() {
+        for code in 1..=4 {
+            let fake = gimbal_camera()
+                .selector(control::DEVICE_STATUS, &[0x2b, 0x28, 0x00, 0x01, 0x00])
+                .selector(control::FRAMING, &[code]);
+            fake.set(Control::Zoom, 200);
+            let camera = fake.camera();
+            let saved = camera.state().unwrap();
+
+            camera.set_zoom(1.0).unwrap();
+            assert_eq!(camera.framing().unwrap(), Framing::Manual);
+            camera.apply(&saved).unwrap();
+
+            assert_eq!(camera.framing().unwrap(), saved.tracking.framing.unwrap());
+            assert_eq!(camera.zoom().unwrap(), 2.0);
+        }
     }
 }
 

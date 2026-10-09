@@ -1,0 +1,31 @@
+[package]
+name = "insta360-link"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+description = "Control Insta360 Link series webcams (unofficial)"
+repository = "https://github.com/sglre6355/insta360-link"
+readme = "README.md"
+keywords = ["insta360", "webcam", "uvc", "v4l2", "ptz"]
+categories = ["hardware-support", "multimedia::video", "os::linux-apis"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
+thiserror = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+indoc = "2"
+serde_json = "1"
+toml = "0.9"
+
+[features]
+# Implements `Serialize` and `Deserialize` for `State` and the settings it
+# holds, so that a state can be saved in any format `serde` supports.
+serde = ["dep:serde"]
+# Exposes `Camera::raw_read` and `Camera::raw_write` for experimenting with
+# selectors this crate has no typed API for. Blocked selectors stay blocked.
+unsafe-raw = []

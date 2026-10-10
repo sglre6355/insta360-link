@@ -77,8 +77,10 @@ impl PauseArea {
             ("pause area right edge", self.x, self.width),
             ("pause area bottom edge", self.y, self.height),
         ] {
-            // Also catches NaN, which fails every comparison.
-            if (start + size).partial_cmp(&1.0) == Some(std::cmp::Ordering::Greater) || size <= 0.0
+            // Also catches NaN, which fails every comparison. The size is
+            // checked as encoded, since a record with no size is unused.
+            if (start + size).partial_cmp(&1.0) == Some(std::cmp::Ordering::Greater)
+                || (size * FRAME_SCALE).round() <= 0.0
             {
                 return Err(Error::OutOfRange {
                     what,
@@ -240,6 +242,10 @@ mod tests {
             },
             PauseArea {
                 width: 0.0,
+                ..left_half()
+            },
+            PauseArea {
+                width: 0.00004,
                 ..left_half()
             },
             PauseArea {

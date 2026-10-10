@@ -59,22 +59,23 @@ impl TrackingArea {
                 })
             }
         };
-        for (what, range) in [("pan limits", &self.pan), ("tilt limits", &self.tilt)] {
-            // `partial_cmp` is `None` for NaN, which is rejected too.
-            if range.start().partial_cmp(range.end()) != Some(std::cmp::Ordering::Less) {
-                return Err(Error::InvalidRange {
+        let limits = |what, range: &RangeInclusive<f64>| {
+            let (start, end) = (tenths(what, *range.start())?, tenths(what, *range.end())?);
+            // Compared as encoded, since limits that round to the same tenth
+            // describe no area.
+            if start < end {
+                Ok((start, end))
+            } else {
+                Err(Error::InvalidRange {
                     what,
                     min: *range.start(),
                     max: *range.end(),
-                });
+                })
             }
-        }
-        let angles = [
-            tenths("pan limits", *self.pan.start())?,
-            tenths("pan limits", *self.pan.end())?,
-            tenths("tilt limits", *self.tilt.end())?,
-            tenths("tilt limits", *self.tilt.start())?,
-        ];
+        };
+        let (pan_start, pan_end) = limits("pan limits", &self.pan)?;
+        let (tilt_start, tilt_end) = limits("tilt limits", &self.tilt)?;
+        let angles = [pan_start, pan_end, tilt_end, tilt_start];
         let mut payload = [0u8; AREA_LEN];
         payload[0] = u8::from(self.enabled);
         for (index, angle) in angles.into_iter().chain(PORTRAIT_DEFAULTS).enumerate() {
@@ -166,6 +167,7 @@ mod tests {
         for (pan, tilt) in [
             (10.0..=-10.0, -30.0..=30.0),
             (-10.0..=10.0, 5.0..=5.0),
+            (10.0..=10.04, -30.0..=30.0),
             (-200.0..=10.0, -30.0..=30.0),
             (f64::NAN..=10.0, -30.0..=30.0),
         ] {

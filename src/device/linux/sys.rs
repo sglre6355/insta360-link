@@ -172,13 +172,15 @@ fn ext_controls(
 }
 
 fn ext_control(id: u32, value: i32) -> V4l2ExtControl {
+    // Zero the union before setting the 32-bit integer member read by the kernel.
+    // The members overlap only on little-endian targets.
+    let mut raw = V4l2ExtControlValue { value64: 0 };
+    raw.value = value;
     V4l2ExtControl {
         id,
         size: 0,
         reserved2: [0],
-        value: V4l2ExtControlValue {
-            value64: value as i64,
-        },
+        value: raw,
     }
 }
 

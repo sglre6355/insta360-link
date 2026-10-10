@@ -143,6 +143,7 @@ impl Preset {
 
 impl Camera {
     fn write_preset_record(&self, record: &[u8]) -> Result<()> {
+        self.require_selector(ai::PRESET_RECORD)?;
         self.require_streaming()?;
         self.xu_write(ai::PRESET_RECORD, record)
     }

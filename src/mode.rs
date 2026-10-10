@@ -217,6 +217,7 @@ impl Camera {
     ///
     /// Fails with [`Error::NotStreaming`] unless video is streaming.
     pub fn set_mode(&self, mode: CameraMode) -> Result<()> {
+        self.require_selector(control::VIEW_STATE)?;
         self.require_streaming()?;
         let current = match self.mode_once_settled()? {
             Some(current) => current,

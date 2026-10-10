@@ -182,6 +182,7 @@ impl Camera {
             let record = area.encode(index as u8 + 1)?;
             payload[index * RECORD_LEN..(index + 1) * RECORD_LEN].copy_from_slice(&record);
         }
+        self.require_selector(aux::PAUSE_AREAS)?;
         self.require_streaming()?;
         self.write_verified(aux::PAUSE_AREAS, &payload, || {
             Ok(self.xu_read(aux::PAUSE_AREAS)? == payload)

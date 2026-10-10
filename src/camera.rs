@@ -223,6 +223,11 @@ impl Camera {
             .ok_or(Error::Unsupported)
     }
 
+    /// Checks selector support before preconditions such as streaming.
+    pub(crate) fn require_selector(&self, selector: Selector) -> Result<()> {
+        self.unit_id(selector).map(|_| ())
+    }
+
     /// Reads the current value of a selector, sized by what the camera reports
     /// for it.
     pub(crate) fn xu_read(&self, selector: Selector) -> Result<Vec<u8>> {
@@ -468,5 +473,25 @@ mod tests {
             fake.camera().get_control(Control::Zoom),
             Err(Error::Unsupported)
         ));
+    }
+
+    #[test]
+    fn absent_features_are_unsupported_even_when_idle() {
+        use crate::{AudioMode, CameraMode, Framing, TrackingArea, TrackingSpeed};
+        let fake = FakeCamera::new().selector(control::DEVICE_STATUS, &[0; 5]);
+        let camera = fake.camera();
+        for result in [
+            camera.set_framing(Framing::Head),
+            camera.set_tracking_speed(TrackingSpeed::Fast),
+            camera.set_audio_mode(AudioMode::MusicBalance),
+            camera.set_tracking_area(&TrackingArea::default()),
+            camera.set_pause_areas(&[]),
+            camera.preset(0).map(|_| ()),
+            camera.set_mode(CameraMode::Tracking),
+            camera.set_privacy(true),
+        ] {
+            assert!(matches!(result, Err(Error::Unsupported)), "{result:?}");
+        }
+        assert!(fake.xu_writes().is_empty());
     }
 }

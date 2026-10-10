@@ -51,8 +51,10 @@ impl Camera {
     /// Fails with [`Error::Unsupported`] on a camera that does not report the
     /// mode, because the change could not be checked.
     pub fn set_privacy(&self, on: bool) -> Result<()> {
+        let current = self.privacy()?;
+        self.require_selector(aux::PRIVACY)?;
         self.require_streaming()?;
-        if self.privacy()? == on {
+        if current == on {
             return Ok(());
         }
         let payload = if on { PRIVACY_ON } else { PRIVACY_OFF };

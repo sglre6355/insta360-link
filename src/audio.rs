@@ -80,6 +80,7 @@ impl Camera {
     ///
     /// Fails with [`Error::NotStreaming`] unless video is streaming.
     pub fn set_audio_mode(&self, mode: AudioMode) -> Result<()> {
+        self.require_selector(aux::AUDIO_MODE)?;
         if self.audio_mode().ok() == Some(mode) {
             return Ok(());
         }

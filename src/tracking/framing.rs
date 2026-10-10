@@ -149,6 +149,7 @@ impl Camera {
     ///
     /// Fails with [`Error::NotStreaming`] unless video is streaming.
     pub fn set_framing(&self, framing: Framing) -> Result<()> {
+        self.require_selector(control::FRAMING)?;
         if self.framing().ok() == Some(framing) {
             return Ok(());
         }
@@ -175,6 +176,7 @@ impl Camera {
     ///
     /// Fails with [`Error::NotStreaming`] unless video is streaming.
     pub fn set_tracking_speed(&self, speed: TrackingSpeed) -> Result<()> {
+        self.require_selector(control::TRACKING_SPEED)?;
         if self.tracking_speed().ok() == Some(speed) {
             return Ok(());
         }

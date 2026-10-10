@@ -76,6 +76,10 @@ pub enum Error {
         slot: u8,
     },
 
+    /// A preset name contains a NUL byte, which terminates names on the camera.
+    #[error("preset names cannot contain a NUL byte")]
+    InvalidPresetName,
+
     /// The camera only applies this change while video is streaming, and no
     /// program is streaming from it.
     #[error("this can only be changed while the camera is streaming video")]

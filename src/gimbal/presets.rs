@@ -66,7 +66,10 @@ fn check_slot(slot: u8) -> Result<()> {
 impl Preset {
     fn encode(&self, slot: u8) -> Result<Vec<u8>> {
         let name = self.name.as_bytes();
-        if name.len() > PRESET_NAME_MAX || name.contains(&0) {
+        if name.contains(&0) {
+            return Err(Error::InvalidPresetName);
+        }
+        if name.len() > PRESET_NAME_MAX {
             return Err(Error::OutOfRange {
                 what: "preset name length in bytes",
                 value: name.len() as f64,
@@ -383,6 +386,19 @@ mod tests {
         ));
         assert!(matches!(check_slot(10), Err(Error::OutOfRange { .. })));
         assert!(check_slot(9).is_ok());
+    }
+
+    #[test]
+    fn nul_names_have_a_specific_error_before_any_write() {
+        let fake = FakeCamera::new();
+        let preset = Preset {
+            name: "a\0b".into(),
+            ..desk()
+        };
+        let err = fake.camera().store_preset(0, &preset).unwrap_err();
+        assert!(matches!(err, Error::InvalidPresetName));
+        assert_eq!(err.to_string(), "preset names cannot contain a NUL byte");
+        assert!(fake.xu_writes().is_empty());
     }
 
     /// A camera that answers the next preset query with `preset`.

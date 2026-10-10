@@ -160,23 +160,23 @@ impl Camera {
 
         settings.white_balance = match self.get_control(Control::AutoWhiteBalance).optional()? {
             None => None,
-            Some(0) => {
-                let kelvin = self.get_control(Control::WhiteBalanceTemperature)?;
-                Some(WhiteBalance::Manual {
+            Some(0) => self
+                .get_control(Control::WhiteBalanceTemperature)
+                .optional()?
+                .map(|kelvin| WhiteBalance::Manual {
                     temperature: kelvin.max(0) as u32,
-                })
-            }
+                }),
             Some(_) => Some(WhiteBalance::Auto),
         };
 
         settings.focus = match self.get_control(Control::AutoFocus).optional()? {
             None => None,
-            Some(0) => {
-                let position = self.get_control(Control::Focus)?;
-                Some(Focus::Manual {
+            Some(0) => self
+                .get_control(Control::Focus)
+                .optional()?
+                .map(|position| Focus::Manual {
                     position: position.max(0) as u32,
-                })
-            }
+                }),
             Some(_) => Some(Focus::Auto),
         };
 
@@ -221,6 +221,7 @@ impl Camera {
             Some(WhiteBalance::Manual {
                 temperature: kelvin,
             }) => {
+                self.control_info(Control::AutoWhiteBalance)?;
                 let raw = self.checked(
                     Control::WhiteBalanceTemperature,
                     "white balance",
@@ -237,6 +238,7 @@ impl Camera {
                 writes.push((Control::AutoFocus, 1));
             }
             Some(Focus::Manual { position }) => {
+                self.control_info(Control::AutoFocus)?;
                 let raw = self.checked(Control::Focus, "focus", position.into())?;
                 writes.push((Control::AutoFocus, 0));
                 writes.push((Control::Focus, raw));
@@ -509,6 +511,46 @@ mod tests {
                 ..Default::default()
             }
         );
+    }
+
+    #[test]
+    fn absent_manual_controls_leave_image_and_state_fields_unset() {
+        for automatic in [Control::AutoWhiteBalance, Control::AutoFocus] {
+            let camera = FakeCamera::new().control(automatic, 0, 1, 1, 0).camera();
+            assert_eq!(camera.image().unwrap(), ImageSettings::default());
+            assert_eq!(camera.state().unwrap().image, ImageSettings::default());
+        }
+    }
+
+    #[test]
+    fn missing_auto_switch_is_detected_before_any_writes() {
+        for (manual, settings) in [
+            (
+                Control::WhiteBalanceTemperature,
+                ImageSettings {
+                    white_balance: Some(WhiteBalance::Manual { temperature: 5000 }),
+                    ..Default::default()
+                },
+            ),
+            (
+                Control::Focus,
+                ImageSettings {
+                    focus: Some(Focus::Manual { position: 30 }),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let fake = FakeCamera::new()
+                .control(Control::Brightness, 0, 100, 1, 50)
+                .control(manual, 0, 10000, 1, 0);
+            let result = fake.camera().set_image(&ImageSettings {
+                brightness: Some(60),
+                ..settings
+            });
+            assert!(matches!(result, Err(Error::Unsupported)));
+            assert!(fake.writes().is_empty());
+            assert_eq!(fake.get(Control::Brightness), 50);
+        }
     }
 
     #[test]

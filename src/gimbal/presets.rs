@@ -151,16 +151,27 @@ impl Camera {
     fn read_preset_record(&self, slot: u8) -> Result<Vec<u8>> {
         let mut query = vec![0u8; RECORD_LEN];
         query[SLOT] = slot + QUERY_OFFSET;
-        self.write_preset_record(&query)?;
-        // The camera answers the query at once. Unused slots return all zeros,
-        // so the slot number can only be verified for records in use.
-        let record = self.xu_read(ai::PRESET_RECORD)?;
-        match record.as_slice() {
-            [other, in_use, ..] if *in_use != 0 && *other != slot => Err(Error::Protocol(format!(
-                "asked for preset slot {slot}, the camera answered with slot {other}"
-            ))),
-            _ => Ok(record),
+        let mut empty_seen = false;
+        // Selection writes can be dropped too. Retry stale records, and select again before
+        // accepting an empty record, which carries no slot id. Two dropped selections returning
+        // empty remain indistinguishable from a genuinely empty slot: the protocol provides no
+        // acknowledgement.
+        for _ in 0..3 {
+            self.write_preset_record(&query)?;
+            let record = self.xu_read(ai::PRESET_RECORD)?;
+            Preset::decode(&record)?;
+            if record[IN_USE] == 0 {
+                if empty_seen {
+                    return Ok(record);
+                }
+                empty_seen = true;
+            } else if record[SLOT] == slot {
+                return Ok(record);
+            } else {
+                empty_seen = false;
+            }
         }
+        Err(Error::NotApplied)
     }
 
     /// Reads the preset in a slot, or `None` if the slot is empty.
@@ -284,6 +295,39 @@ mod tests {
             tilt: -5.0,
             zoom: 1.5,
         }
+    }
+
+    #[test]
+    fn reselects_after_a_stale_empty_or_occupied_record() {
+        for stale in [vec![0; RECORD_LEN], desk().encode(1).unwrap()] {
+            let fake = FakeCamera::new().selector(ai::PRESET_RECORD, &[0; RECORD_LEN]);
+            fake.script(ai::PRESET_RECORD, [stale, desk().encode(3).unwrap()]);
+            assert_eq!(fake.camera().preset(3).unwrap(), Some(desk()));
+            assert_eq!(fake.xu_writes().len(), 2);
+        }
+    }
+
+    #[test]
+    fn empty_slots_are_selected_twice_and_stale_slots_do_not_loop_forever() {
+        let fake = FakeCamera::new().selector(ai::PRESET_RECORD, &[0; RECORD_LEN]);
+        assert_eq!(fake.camera().preset(3).unwrap(), None);
+        assert_eq!(fake.xu_writes().len(), 2);
+        let stale = FakeCamera::new()
+            .selector(ai::PRESET_RECORD, &desk().encode(1).unwrap())
+            .swallow_xu_writes();
+        assert!(matches!(stale.camera().preset(3), Err(Error::NotApplied)));
+        assert_eq!(stale.xu_writes().len(), 3);
+    }
+
+    #[test]
+    fn store_verification_reselects_after_a_stale_empty_record() {
+        let fake = FakeCamera::new().selector(ai::PRESET_RECORD, &[0; RECORD_LEN]);
+        fake.script(
+            ai::PRESET_RECORD,
+            [vec![0; RECORD_LEN], desk().encode(3).unwrap()],
+        );
+        fake.camera().store_preset(3, &desk()).unwrap();
+        assert_eq!(fake.xu_writes().len(), 3);
     }
 
     #[test]

@@ -77,7 +77,8 @@ Keep these behaviors in mind:
   `Error::NotStreaming` unless some program is streaming from the camera. Gimbal movement, zoom, and
   standard picture settings work without one.
 - Vendor writes are verified. The crate reads each value back and returns `Error::NotApplied` if the
-  camera does not apply it. Writes are not retried automatically.
+  camera does not apply it. Setting writes are not retried automatically. Preset slot-selection
+  queries may be repeated to check stale responses.
 - `Camera::mode` can return `Error::Busy` briefly during a mode change, or while tracking has no
   person to follow.
 

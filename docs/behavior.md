@@ -15,6 +15,10 @@ After a vendor write, the crate reads the value back for up to five seconds unti
 requested value. If the camera does not apply the change, the call returns `Error::NotApplied`.
 Writes are not retried automatically.
 
+Preset slot-selection queries are an exception: stale responses trigger reselection, and an empty
+response is confirmed by selecting again. Empty records contain no slot identifier, so repeated
+dropped selections returning an empty record cannot be distinguished from a genuinely empty slot.
+
 ## Vendor writes are rate-limited
 
 The camera silently drops writes less than about 45 ms apart. The crate enforces a minimum 100 ms

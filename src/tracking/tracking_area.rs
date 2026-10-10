@@ -130,7 +130,18 @@ impl Camera {
     /// A camera that does not support tracking areas always answers this way,
     /// and one that does can still drop a write.
     pub fn set_tracking_area(&self, area: &TrackingArea) -> Result<()> {
-        let payload = area.encode()?;
+        let mut payload = area.encode()?;
+        let current = self.xu_read(ai::TRACKING_AREA)?;
+        if current.len() != AREA_LEN {
+            return Err(Error::Protocol(format!(
+                "the tracking area is {} bytes, not {AREA_LEN}",
+                current.len()
+            )));
+        }
+        // Only the landscape limits and enable flag are modeled by this API. Preserve portrait
+        // limits and the other firmware-owned fields.
+        payload[1] = current[1];
+        payload[10..].copy_from_slice(&current[10..]);
         self.require_streaming()?;
         self.write_verified(ai::TRACKING_AREA, &payload, || {
             let stored = self.xu_read(ai::TRACKING_AREA)?;
@@ -146,6 +157,23 @@ impl Camera {
 mod tests {
     use super::*;
     use crate::testing::FakeCamera;
+
+    #[test]
+    fn toggling_enabled_preserves_portrait_limits_and_other_fields() {
+        let mut payload = TrackingArea::default().encode().unwrap();
+        payload[1] = 7;
+        payload[18] = 9;
+        for (index, angle) in [-100i16, 100, 200, -200].into_iter().enumerate() {
+            payload[10 + 2 * index..12 + 2 * index].copy_from_slice(&angle.to_le_bytes());
+        }
+        let fake = FakeCamera::new().selector(ai::TRACKING_AREA, &payload);
+        let camera = fake.camera();
+        let mut area = camera.tracking_area().unwrap();
+        area.enabled = true;
+        camera.set_tracking_area(&area).unwrap();
+        payload[0] = 1;
+        assert_eq!(fake.xu_writes()[0].2, payload);
+    }
 
     #[test]
     fn default_area_encodes_as_link_controller_resets_it() {

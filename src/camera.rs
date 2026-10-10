@@ -1,6 +1,7 @@
 //! The [`Camera`] handle.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::io;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -41,6 +42,8 @@ pub struct Camera {
     /// When the last vendor write was sent. It starts at the moment the camera
     /// is opened, because another program may have written just before.
     last_write: Cell<Instant>,
+    /// Payload lengths the camera has reported, by unit id and selector.
+    lens: RefCell<HashMap<(u8, u8), u16>>,
 }
 
 impl Camera {
@@ -66,6 +69,7 @@ impl Camera {
             transport,
             info,
             last_write: Cell::new(Instant::now()),
+            lens: RefCell::default(),
         })
     }
 
@@ -76,6 +80,7 @@ impl Camera {
             transport: Box::new(transport),
             info,
             last_write: Cell::new(Instant::now()),
+            lens: RefCell::default(),
         }
     }
 
@@ -173,6 +178,35 @@ impl Camera {
         Ok(u16::from_le_bytes(len))
     }
 
+    /// The payload length of a selector. A selector's length does not change
+    /// while the camera is connected, so it is asked for once and remembered.
+    fn xu_len(&self, unit_id: u8, selector: u8) -> io::Result<u16> {
+        let key = (unit_id, selector);
+        if let Some(&len) = self.lens.borrow().get(&key) {
+            return Ok(len);
+        }
+        let len = self.xu_len_raw(unit_id, selector)?;
+        self.lens.borrow_mut().insert(key, len);
+        Ok(len)
+    }
+
+    /// Sends a request for a selector's value. A failure may mean the
+    /// remembered length is wrong, so it is forgotten and asked for again next
+    /// time.
+    fn xu_value_query(
+        &self,
+        unit_id: u8,
+        selector: u8,
+        query: XuQuery,
+        data: &mut [u8],
+    ) -> io::Result<()> {
+        let result = self.transport.xu_query(unit_id, selector, query, data);
+        if result.is_err() {
+            self.lens.borrow_mut().remove(&(unit_id, selector));
+        }
+        result
+    }
+
     /// Finds the id of the selector's unit and checks that the selector may be
     /// used.
     fn unit_id(&self, selector: Selector) -> Result<u8> {
@@ -195,11 +229,10 @@ impl Camera {
         let unit_id = self.unit_id(selector)?;
         let context = || format!("cannot read {selector}");
         let len = self
-            .xu_len_raw(unit_id, selector.id)
+            .xu_len(unit_id, selector.id)
             .map_err(|err| Error::io(context(), err))?;
         let mut data = vec![0u8; usize::from(len)];
-        self.transport
-            .xu_query(unit_id, selector.id, XuQuery::GetCur, &mut data)
+        self.xu_value_query(unit_id, selector.id, XuQuery::GetCur, &mut data)
             .map_err(|err| Error::io(context(), err))?;
         Ok(data)
     }
@@ -211,7 +244,7 @@ impl Camera {
         let unit_id = self.unit_id(selector)?;
         let context = || format!("cannot write {selector}");
         let len = self
-            .xu_len_raw(unit_id, selector.id)
+            .xu_len(unit_id, selector.id)
             .map_err(|err| Error::io(context(), err))?;
         if usize::from(len) != data.len() {
             return Err(Error::Protocol(format!(
@@ -222,8 +255,7 @@ impl Camera {
         let mut data = data.to_vec();
         sleep(WRITE_GAP.saturating_sub(self.last_write.get().elapsed()));
         let written = self
-            .transport
-            .xu_query(unit_id, selector.id, XuQuery::SetCur, &mut data)
+            .xu_value_query(unit_id, selector.id, XuQuery::SetCur, &mut data)
             .map_err(|err| Error::io(context(), err));
         self.last_write.set(Instant::now());
         written
@@ -327,6 +359,40 @@ mod tests {
     fn camera_can_move_to_another_thread() {
         fn assert_send<T: Send>() {}
         assert_send::<Camera>();
+    }
+
+    #[test]
+    fn a_selector_is_asked_for_its_length_once() {
+        let fake = FakeCamera::new()
+            .selector(control::VIEW_STATE, &[0, 0])
+            .selector(control::DEVICE_STATUS, &[0; 5]);
+        let camera = fake.camera();
+        camera.xu_read(control::VIEW_STATE).unwrap();
+        camera.xu_write(control::VIEW_STATE, &[1, 0]).unwrap();
+        camera.xu_read(control::VIEW_STATE).unwrap();
+        camera.xu_read(control::DEVICE_STATUS).unwrap();
+        assert_eq!(
+            fake.xu_len_queries(),
+            [(9, control::VIEW_STATE.id), (9, control::DEVICE_STATUS.id)]
+        );
+        // A probe reports what the camera says now.
+        camera.probe();
+        assert_eq!(fake.xu_len_queries().len(), 4);
+    }
+
+    #[test]
+    fn a_failed_request_makes_the_length_be_asked_for_again() {
+        let fake = FakeCamera::new().selector(control::VIEW_STATE, &[0, 0]);
+        let camera = fake.camera();
+        camera.xu_read(control::VIEW_STATE).unwrap();
+        // The fake rejects a request of the wrong length, as the driver does.
+        fake.poke(control::VIEW_STATE, &[1, 2, 3]);
+        assert!(matches!(
+            camera.xu_read(control::VIEW_STATE),
+            Err(Error::Io { .. })
+        ));
+        assert_eq!(camera.xu_read(control::VIEW_STATE).unwrap(), [1, 2, 3]);
+        assert_eq!(fake.xu_len_queries().len(), 2);
     }
 
     #[test]

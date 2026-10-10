@@ -18,6 +18,7 @@ struct State {
     writes: Vec<Vec<(Control, i32)>>,
     xu_writes: Vec<(u8, u8, Vec<u8>)>,
     xu_reads: Vec<(u8, u8)>,
+    xu_len_queries: Vec<(u8, u8)>,
     swallow_xu_writes: bool,
     drop_xu_writes: usize,
     scripted: BTreeMap<(u8, u8), VecDeque<Vec<u8>>>,
@@ -189,6 +190,11 @@ impl FakeCamera {
     pub(crate) fn xu_reads(&self) -> Vec<(u8, u8)> {
         self.0.lock().unwrap().xu_reads.clone()
     }
+
+    /// Every selector length query so far, as `(unit id, selector)`.
+    pub(crate) fn xu_len_queries(&self) -> Vec<(u8, u8)> {
+        self.0.lock().unwrap().xu_len_queries.clone()
+    }
 }
 
 impl Transport for FakeCamera {
@@ -204,7 +210,10 @@ impl Transport for FakeCamera {
         let len = state.selectors.get(&key).ok_or_else(missing)?.len();
         match query {
             XuQuery::GetInfo => data[0] = 0x03,
-            XuQuery::GetLen => data.copy_from_slice(&(len as u16).to_le_bytes()),
+            XuQuery::GetLen => {
+                data.copy_from_slice(&(len as u16).to_le_bytes());
+                state.xu_len_queries.push(key);
+            }
             XuQuery::GetCur | XuQuery::SetCur if data.len() != len => {
                 return Err(io::ErrorKind::InvalidInput.into());
             }

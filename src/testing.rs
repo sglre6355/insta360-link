@@ -1,9 +1,8 @@
 //! A fake camera for unit tests.
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::io;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use crate::camera::Camera;
 use crate::device::info::DeviceInfo;
@@ -41,7 +40,7 @@ impl State {
 /// Clones share state, so a test can keep one handle and give another to a
 /// [`Camera`].
 #[derive(Clone, Default)]
-pub(crate) struct FakeCamera(Rc<RefCell<State>>);
+pub(crate) struct FakeCamera(Arc<Mutex<State>>);
 
 /// The error for something the fake device does not have.
 fn missing() -> io::Error {
@@ -68,7 +67,7 @@ impl FakeCamera {
             step,
             default,
         };
-        self.0.borrow_mut().controls.insert(id, (info, default));
+        self.0.lock().unwrap().controls.insert(id, (info, default));
         self
     }
 
@@ -94,7 +93,8 @@ impl FakeCamera {
     pub(crate) fn dead_selector(self, selector: Selector) -> Self {
         let fake = self.selector(selector, &[]);
         fake.0
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .selectors
             .retain(|&(_, id), _| id != selector.id);
         fake
@@ -109,7 +109,7 @@ impl FakeCamera {
         value: &[u8],
     ) -> Self {
         {
-            let mut state = self.0.borrow_mut();
+            let mut state = self.0.lock().unwrap();
             if !state.units.iter().any(|unit| unit.id == id) {
                 state.units.push(ExtensionUnit {
                     id,
@@ -129,19 +129,19 @@ impl FakeCamera {
     /// Makes the device accept selector writes without applying them, as a real
     /// camera does while it is not streaming.
     pub(crate) fn swallow_xu_writes(self) -> Self {
-        self.0.borrow_mut().swallow_xu_writes = true;
+        self.0.lock().unwrap().swallow_xu_writes = true;
         self
     }
 
     /// Makes the device ignore the next `count` selector writes, then behave
     /// normally again.
     pub(crate) fn drop_next_xu_writes(&self, count: usize) {
-        self.0.borrow_mut().drop_xu_writes = count;
+        self.0.lock().unwrap().drop_xu_writes = count;
     }
 
     /// Overwrites a selector's value behind the camera's back.
     pub(crate) fn poke(&self, selector: Selector, value: &[u8]) {
-        let mut state = self.0.borrow_mut();
+        let mut state = self.0.lock().unwrap();
         let key = state.key(selector);
         state.selectors.insert(key, value.to_vec());
     }
@@ -149,7 +149,7 @@ impl FakeCamera {
     /// Queues values to answer the next reads of a selector with, ahead of its
     /// stored value. Lets a test play back a camera changing state on its own.
     pub(crate) fn script<const N: usize>(&self, selector: Selector, values: [Vec<u8>; N]) {
-        let mut state = self.0.borrow_mut();
+        let mut state = self.0.lock().unwrap();
         let key = state.key(selector);
         state.scripted.insert(key, values.into());
     }
@@ -160,7 +160,7 @@ impl FakeCamera {
 
     /// A camera that identifies itself as another model.
     pub(crate) fn camera_with_product_id(&self, product_id: u16) -> Camera {
-        let units = self.0.borrow().units.clone();
+        let units = self.0.lock().unwrap().units.clone();
         Camera::with_transport(
             DeviceInfo::new("/dev/video0", product_id, units),
             self.clone(),
@@ -168,26 +168,26 @@ impl FakeCamera {
     }
 
     pub(crate) fn set(&self, id: Control, value: i32) {
-        self.0.borrow_mut().controls.get_mut(&id).unwrap().1 = value;
+        self.0.lock().unwrap().controls.get_mut(&id).unwrap().1 = value;
     }
 
     pub(crate) fn get(&self, id: Control) -> i32 {
-        self.0.borrow().controls[&id].1
+        self.0.lock().unwrap().controls[&id].1
     }
 
     /// Every control write so far, one entry per request.
     pub(crate) fn writes(&self) -> Vec<Vec<(Control, i32)>> {
-        self.0.borrow().writes.clone()
+        self.0.lock().unwrap().writes.clone()
     }
 
     /// Every selector write so far, as `(unit id, selector, payload)`.
     pub(crate) fn xu_writes(&self) -> Vec<(u8, u8, Vec<u8>)> {
-        self.0.borrow().xu_writes.clone()
+        self.0.lock().unwrap().xu_writes.clone()
     }
 
     /// Every selector value read so far, as `(unit id, selector)`.
     pub(crate) fn xu_reads(&self) -> Vec<(u8, u8)> {
-        self.0.borrow().xu_reads.clone()
+        self.0.lock().unwrap().xu_reads.clone()
     }
 }
 
@@ -199,7 +199,7 @@ impl Transport for FakeCamera {
         query: XuQuery,
         data: &mut [u8],
     ) -> io::Result<()> {
-        let mut state = self.0.borrow_mut();
+        let mut state = self.0.lock().unwrap();
         let key = (unit_id, selector);
         let len = state.selectors.get(&key).ok_or_else(missing)?.len();
         match query {
@@ -227,12 +227,12 @@ impl Transport for FakeCamera {
     }
 
     fn query_control(&self, control: Control) -> io::Result<Option<ControlInfo>> {
-        let state = self.0.borrow();
+        let state = self.0.lock().unwrap();
         Ok(state.controls.get(&control).map(|(info, _)| *info))
     }
 
     fn get_controls(&self, controls: &mut [(Control, i32)]) -> io::Result<()> {
-        let state = self.0.borrow();
+        let state = self.0.lock().unwrap();
         for (id, value) in controls {
             *value = state.controls.get(id).ok_or_else(missing)?.1;
         }
@@ -240,7 +240,7 @@ impl Transport for FakeCamera {
     }
 
     fn set_controls(&self, controls: &[(Control, i32)]) -> io::Result<()> {
-        let mut state = self.0.borrow_mut();
+        let mut state = self.0.lock().unwrap();
         for (id, value) in controls {
             let (info, _) = state.controls.get(id).ok_or_else(missing)?;
             if !(info.minimum..=info.maximum).contains(value) {

@@ -324,6 +324,12 @@ mod tests {
     use crate::testing::FakeCamera;
 
     #[test]
+    fn camera_can_move_to_another_thread() {
+        fn assert_send<T: Send>() {}
+        assert_send::<Camera>();
+    }
+
+    #[test]
     fn vendor_writes_are_spaced_apart() {
         let fake = FakeCamera::new().selector(control::VIEW_STATE, &[0, 0]);
         let start = Instant::now();

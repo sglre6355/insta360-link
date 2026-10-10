@@ -106,7 +106,9 @@ pub struct ControlInfo {
 ///
 /// Errors are plain [`io::Error`]s from the platform. [`Camera`](crate::Camera)
 /// turns them into [`Error`](crate::Error)s.
-pub trait Transport {
+///
+/// A transport must be [`Send`] so that the camera can move to another thread.
+pub trait Transport: Send {
     /// Sends one request to the extension unit with the given unit id.
     ///
     /// For [`XuQuery::SetCur`] `data` is the payload to write. For every other

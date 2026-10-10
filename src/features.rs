@@ -141,8 +141,8 @@ impl Camera {
             .ok_or_else(|| Error::Protocol(format!("{selector} is 0 bytes")))
     }
 
-    /// Sets a switch using the first byte of its selector's payload, zeroing
-    /// the remaining bytes.
+    /// Sets a switch using the first byte of its selector's payload, keeping
+    /// the remaining bytes as the camera reports them.
     fn set_switch_selector(&self, selector: Selector, on: bool) -> Result<()> {
         let mut payload = self.xu_read(selector)?;
         match payload.first() {
@@ -151,7 +151,6 @@ impl Camera {
             Some(_) => {}
         }
         self.require_streaming()?;
-        payload.fill(0);
         payload[0] = u8::from(on);
         self.write_verified(selector, &payload, || {
             Ok(self.switch_selector(selector)? == on)
@@ -327,12 +326,15 @@ mod tests {
     fn horizontal_correction_is_the_first_byte_of_a_longer_selector() {
         let fake = features_camera();
         let camera = fake.camera();
+        // The meaning of the other bytes is unknown, so they are kept.
+        let mut payload = vec![0u8; 25];
+        payload[7] = 0x5a;
+        fake.poke(aux::HORIZONTAL_CORRECTION, &payload);
         let on = Features {
             horizontal_correction: Some(true),
             ..Default::default()
         };
         camera.set_features(&on).unwrap();
-        let mut payload = vec![0u8; 25];
         payload[0] = 1;
         assert_eq!(
             fake.xu_writes(),

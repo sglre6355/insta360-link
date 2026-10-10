@@ -122,6 +122,16 @@ impl Camera {
         })
     }
 
+    /// Converts a position to the values of the pan and tilt controls, or fails
+    /// if the gimbal cannot reach it.
+    pub(crate) fn position_raw(&self, pan: f64, tilt: f64) -> Result<(i32, i32)> {
+        let (pan_info, tilt_info) = self.pan_tilt_info()?;
+        Ok((
+            to_raw("pan", pan, UNITS_PER_DEGREE, &pan_info)?,
+            to_raw("tilt", tilt, UNITS_PER_DEGREE, &tilt_info)?,
+        ))
+    }
+
     /// Moves the gimbal. An axis left as `None` stays where it is.
     ///
     /// Angles are rounded to the gimbal's resolution, which the camera reports

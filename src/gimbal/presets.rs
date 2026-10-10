@@ -223,15 +223,24 @@ impl Camera {
     ///
     /// Fails with [`Error::EmptyPreset`] if the slot is empty.
     ///
+    /// Fails with [`Error::OutOfRange`] if the preset holds a zoom or position
+    /// this camera does not accept. Nothing is changed in that case.
+    ///
     /// Fails with [`Error::NotStreaming`] unless video is streaming.
     pub fn recall_preset(&self, slot: u8) -> Result<Preset> {
         let preset = self.preset(slot)?.ok_or(Error::EmptyPreset { slot })?;
-        self.set_mode(preset.mode)?;
-        self.set_zoom(preset.zoom)?;
         let aims_itself = matches!(
             preset.mode,
             CameraMode::Tracking | CameraMode::Overhead | CameraMode::AutoFraming
         );
+        // Checked before the mode is switched, so that a record this camera
+        // cannot apply leaves it as it was.
+        self.zoom_raw(preset.zoom)?;
+        if !aims_itself {
+            self.position_raw(preset.pan, preset.tilt).optional()?;
+        }
+        self.set_mode(preset.mode)?;
+        self.set_zoom(preset.zoom)?;
         if !aims_itself {
             let moved = self.set_position(PanTiltUpdate {
                 pan: Some(preset.pan),
@@ -263,6 +272,9 @@ impl Camera {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::device::selectors::control;
+    use crate::device::transport::Control;
+    use crate::testing::FakeCamera;
 
     fn desk() -> Preset {
         Preset {
@@ -326,5 +338,84 @@ mod tests {
         ));
         assert!(matches!(check_slot(10), Err(Error::OutOfRange { .. })));
         assert!(check_slot(9).is_ok());
+    }
+
+    /// A camera that answers the next preset query with `preset`.
+    fn camera_holding(preset: &Preset) -> FakeCamera {
+        let fake = FakeCamera::new()
+            .selector(control::VIEW_STATE, &[0u8; 61])
+            .selector(ai::PRESET_RECORD, &[0u8; RECORD_LEN])
+            .control(Control::Zoom, 100, 400, 1, 100)
+            .control(Control::Pan, -522_000, 522_000, 3600, 0)
+            .control(Control::Tilt, -324_000, 360_000, 3600, 0);
+        fake.script(ai::PRESET_RECORD, [preset.encode(3).unwrap()]);
+        fake
+    }
+
+    #[test]
+    fn recall_applies_mode_zoom_and_position() {
+        let preset = Preset {
+            mode: CameraMode::DeskView,
+            ..desk()
+        };
+        let fake = camera_holding(&preset);
+        let camera = fake.camera();
+        assert_eq!(camera.recall_preset(3).unwrap(), preset);
+        assert_eq!(camera.mode().unwrap(), CameraMode::DeskView);
+        assert_eq!(fake.get(Control::Zoom), 150);
+        assert_eq!(
+            (fake.get(Control::Pan), fake.get(Control::Tilt)),
+            (72_000, -18_000)
+        );
+    }
+
+    #[test]
+    fn recall_changes_nothing_when_the_record_does_not_fit_the_camera() {
+        // Records another program could have stored: a zoom beyond this
+        // camera's lens and a pan beyond its gimbal.
+        for (what, preset) in [
+            (
+                "zoom",
+                Preset {
+                    mode: CameraMode::DeskView,
+                    zoom: 6.0,
+                    ..desk()
+                },
+            ),
+            (
+                "pan",
+                Preset {
+                    mode: CameraMode::DeskView,
+                    pan: 170.0,
+                    ..desk()
+                },
+            ),
+        ] {
+            let fake = camera_holding(&preset);
+            let camera = fake.camera();
+            let err = camera.recall_preset(3).unwrap_err();
+            assert!(
+                matches!(err, Error::OutOfRange { what: found, .. } if found == what),
+                "{err:?}"
+            );
+            // Only the query for the slot was sent.
+            assert_eq!(fake.xu_writes().len(), 1);
+            assert!(fake.writes().is_empty());
+            assert_eq!(camera.mode().unwrap(), CameraMode::Normal);
+        }
+    }
+
+    #[test]
+    fn recall_ignores_the_position_in_modes_that_aim_themselves() {
+        let preset = Preset {
+            mode: CameraMode::Overhead,
+            pan: 170.0,
+            ..desk()
+        };
+        let fake = camera_holding(&preset);
+        let camera = fake.camera();
+        camera.recall_preset(3).unwrap();
+        assert_eq!(camera.mode().unwrap(), CameraMode::Overhead);
+        assert_eq!(fake.writes(), [[(Control::Zoom, 150)]]);
     }
 }

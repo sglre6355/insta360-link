@@ -40,10 +40,16 @@ impl Camera {
         Ok(f64::from(raw) / UNITS_PER_ZOOM)
     }
 
+    /// Converts a zoom factor to the value of the zoom control, or fails if the
+    /// camera does not accept it.
+    pub(crate) fn zoom_raw(&self, factor: f64) -> Result<i32> {
+        let info = self.control_info(Control::Zoom)?;
+        to_raw("zoom", factor, UNITS_PER_ZOOM, &info)
+    }
+
     /// Sets the zoom factor.
     pub fn set_zoom(&self, factor: f64) -> Result<()> {
-        let info = self.control_info(Control::Zoom)?;
-        let raw = to_raw("zoom", factor, UNITS_PER_ZOOM, &info)?;
+        let raw = self.zoom_raw(factor)?;
         self.set_control(Control::Zoom, raw)
     }
 }

@@ -147,7 +147,7 @@ impl Camera {
                 }
                 self.set_exposure_mode(true)?;
                 for (selector, value) in [(control::ISO, iso), (control::SHUTTER, shutter)] {
-                    if close_enough(self.read_u16(selector)?, value) {
+                    if self.read_u16(selector)? == value {
                         continue;
                     }
                     self.require_streaming()?;
@@ -239,10 +239,27 @@ mod tests {
                 (9, control::SHUTTER.id, 100u16.to_le_bytes().to_vec()),
             ]
         );
-        // The camera reports 1/60 s as 59, so asking for 60 again is a no-op.
+        // An adjacent request must still be sent. Only verification tolerates the camera rounding
+        // the requested value.
         fake.poke(control::SHUTTER, &59u16.to_le_bytes());
+        fake.script(
+            control::SHUTTER,
+            [59u16.to_le_bytes().to_vec(), 59u16.to_le_bytes().to_vec()],
+        );
         camera.set_exposure(&manual(800, 60)).unwrap();
-        assert_eq!(fake.xu_writes().len(), 2);
+        assert_eq!(fake.xu_writes().len(), 3);
+        assert_eq!(fake.xu_writes()[2].2, 60u16.to_le_bytes());
+    }
+
+    #[test]
+    fn adjacent_manual_values_are_sent_in_both_directions() {
+        for (iso, shutter) in [(299, 49), (301, 51)] {
+            let fake = exposure_camera();
+            fake.poke(control::EXPOSURE_MODE, &[AE_MANUAL]);
+            fake.camera().set_exposure(&manual(iso, shutter)).unwrap();
+            assert_eq!(fake.xu_writes().len(), 2);
+            assert_eq!(fake.camera().exposure_in_effect().unwrap(), (iso, shutter));
+        }
     }
 
     #[test]

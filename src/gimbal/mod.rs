@@ -28,5 +28,30 @@ pub(super) fn to_raw(
         });
     }
     let step = f64::from(info.step.max(1));
-    Ok((min + ((raw - min) / step).round() * step) as i32)
+    let last_step = ((max - min) / step).floor();
+    let nearest_step = ((raw - min) / step).round().min(last_step);
+    Ok((min + nearest_step * step) as i32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rounding_stays_on_a_valid_step_within_the_range() {
+        for (minimum, maximum, value, expected) in [
+            (0, 100, 100.0, 80),
+            (-100, 0, 0.0, -20),
+            (10, 30, 30.0, 10),
+            (0, 120, 120.0, 120),
+        ] {
+            let info = ControlInfo {
+                minimum,
+                maximum,
+                step: 40,
+                default: minimum,
+            };
+            assert_eq!(to_raw("test", value, 1.0, &info).unwrap(), expected);
+        }
+    }
 }

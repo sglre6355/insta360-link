@@ -9,10 +9,7 @@ fn main() -> Result<(), Error> {
     let info = camera.info();
 
     println!("{} at {}", info.model, info.id);
-    match camera.firmware_version() {
-        Ok(version) => println!("firmware {version}"),
-        Err(err) => return Err(err),
-    }
+    println!("firmware {}", camera.firmware_version()?);
 
     let state = camera.state()?;
     println!("{state:#?}");

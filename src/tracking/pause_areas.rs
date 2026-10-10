@@ -73,31 +73,33 @@ impl PauseArea {
                 })
             }
         };
-        for (what, start, size) in [
-            ("pause area right edge", self.x, self.width),
-            ("pause area bottom edge", self.y, self.height),
-        ] {
-            // Also catches NaN, which fails every comparison. The size is
-            // checked as encoded, since a record with no size is unused.
-            if (start + size).partial_cmp(&1.0) == Some(std::cmp::Ordering::Greater)
-                || (size * FRAME_SCALE).round() <= 0.0
-            {
-                return Err(Error::OutOfRange {
+        // Encodes a size as the distance between the two rounded edges.
+        // Rounding the size by itself could put the far edge past the frame.
+        let size = |what, start: f64, size: f64| {
+            let near = (start * FRAME_SCALE).round();
+            let far = ((start + size) * FRAME_SCALE).round();
+            // A record with no size is unused. NaN fails both comparisons.
+            if start + size <= 1.0 && near < far {
+                Ok((far - near) as u16)
+            } else {
+                Err(Error::OutOfRange {
                     what,
                     value: start + size,
                     min: 0.0,
                     max: 1.0,
-                });
+                })
             }
-        }
+        };
         let mut record = [0u8; RECORD_LEN];
         record[0] = id | if self.active { ACTIVE } else { 0 };
         record[3..5].copy_from_slice(&angle("pan", self.pan)?.to_le_bytes());
         record[5..7].copy_from_slice(&angle("tilt", self.tilt)?.to_le_bytes());
         record[7..9].copy_from_slice(&fraction("pause area x", self.x)?.to_le_bytes());
         record[9..11].copy_from_slice(&fraction("pause area y", self.y)?.to_le_bytes());
-        record[11..13].copy_from_slice(&fraction("pause area width", self.width)?.to_le_bytes());
-        record[13..15].copy_from_slice(&fraction("pause area height", self.height)?.to_le_bytes());
+        let width = size("pause area right edge", self.x, self.width)?;
+        let height = size("pause area bottom edge", self.y, self.height)?;
+        record[11..13].copy_from_slice(&width.to_le_bytes());
+        record[13..15].copy_from_slice(&height.to_le_bytes());
         Ok(record)
     }
 
@@ -231,6 +233,19 @@ mod tests {
         let record = area.encode(2).unwrap();
         assert_eq!(record[..7], [0x02, 0x00, 0x00, 0xd4, 0xfe, 0x64, 0x00]);
         assert_eq!(PauseArea::decode(&record), Some(area));
+    }
+
+    #[test]
+    fn rounding_keeps_the_far_edge_inside_the_frame() {
+        // Rounded separately, x and width would add up to 10001.
+        let area = PauseArea {
+            x: 0.00005,
+            width: 0.99995,
+            ..left_half()
+        };
+        let record = area.encode(1).unwrap();
+        let word = |at: usize| u16::from_le_bytes([record[at], record[at + 1]]);
+        assert_eq!((word(7), word(11)), (1, 9999));
     }
 
     #[test]

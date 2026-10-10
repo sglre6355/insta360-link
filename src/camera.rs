@@ -115,9 +115,9 @@ impl Camera {
     /// Reads the length, capability flags, and current value of every selector
     /// advertised by the camera's extension units.
     ///
-    /// This operation never writes to the camera. Blocked selectors and
-    /// unrecognized units are reported without reading their values. See
-    /// [`xu::is_blocked`].
+    /// This operation never writes to the camera. For blocked selectors and
+    /// selectors in unrecognized units, it queries only the length and
+    /// capability flags, without reading their values. See [`xu::is_blocked`].
     pub fn probe(&self) -> Vec<SelectorProbe> {
         self.info
             .units

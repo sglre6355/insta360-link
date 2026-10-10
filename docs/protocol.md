@@ -56,7 +56,8 @@ does not mean to change as the camera has it.
 
 ### Blocked
 
-The crate never reads or writes these control-unit selectors, including through the raw API:
+The crate never reads or writes the values of these control-unit selectors, including through the
+raw API. A probe still queries their length and capability flags (`GET_LEN` and `GET_INFO`):
 
 | Selector | Vendor name |
 |---|---|

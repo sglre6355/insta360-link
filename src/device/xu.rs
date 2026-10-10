@@ -206,6 +206,10 @@ pub fn selector_name(kind: UnitKind, selector: u8) -> Option<String> {
 /// Incorrect writes could render the camera unusable, so writes are prohibited.
 /// Reads are also blocked as a precaution because their effects on
 /// file-transfer selectors have not been investigated.
+///
+/// Only reads and writes of the selector's value are blocked.
+/// [`Camera::probe`](crate::Camera::probe) still queries the length and
+/// capability flags of a blocked selector.
 pub fn is_blocked(kind: UnitKind, selector: u8) -> bool {
     Selector::new(kind, selector).is_blocked()
 }

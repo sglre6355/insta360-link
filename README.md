@@ -85,9 +85,10 @@ See [Behavior and limitations](docs/behavior.md) for details and additional limi
 
 ## Safety
 
-This crate aims to block potentially dangerous camera operations. It blocks all reads and writes to
-seven control-unit selectors that run scripts, transfer files, flash firmware, change USB mode, or
-store licenses and keys. These restrictions also apply to the raw API.
+This crate aims to block potentially dangerous camera operations. It never reads or writes the
+values of seven control-unit selectors that run scripts, transfer files, flash firmware, change USB
+mode, or store licenses and keys. These restrictions also apply to the raw API. `Camera::probe`
+still queries their length and capability flags without reading or writing their values.
 
 Changing feature bits 5 or 13 restarts the camera. The typed API preserves unmodeled bits, but the
 raw API can change them. Use care when writing the feature selector.

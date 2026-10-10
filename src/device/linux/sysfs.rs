@@ -20,13 +20,16 @@ pub(crate) fn list() -> Result<Vec<DeviceInfo>> {
 /// Describes the camera behind a device node, following symlinks such as those
 /// in `/dev/v4l/by-id`.
 pub(crate) fn find(id: &DeviceId) -> Result<DeviceInfo> {
+    find_in(id, Path::new(SYS_CLASS))
+}
+
+fn find_in(id: &DeviceId, sys_class: &Path) -> Result<DeviceInfo> {
     let node = fs::canonicalize(id.as_str())
         .map_err(|err| Error::io(format!("cannot resolve {id}"), err))?;
     let not_a_link = || Error::NotALink(id.clone());
     let name = node.file_name().ok_or_else(not_a_link)?;
-    inspect(&Path::new(SYS_CLASS).join(name), &node)
-        .ok()
-        .flatten()
+    inspect(&sys_class.join(name), &node)
+        .map_err(|err| Error::io(format!("cannot inspect {id}"), err))?
         .ok_or_else(not_a_link)
 }
 
@@ -65,12 +68,8 @@ fn inspect(entry: &Path, node: &Path) -> io::Result<Option<DeviceInfo>> {
     let Some(usb) = interface.parent() else {
         return Ok(None);
     };
-    let (Some(vendor_id), Some(product_id)) = (
-        read_hex(&usb.join("idVendor")),
-        read_hex(&usb.join("idProduct")),
-    ) else {
-        return Ok(None);
-    };
+    let vendor_id = read_hex(&usb.join("idVendor"))?;
+    let product_id = read_hex(&usb.join("idProduct"))?;
     if vendor_id != VENDOR_ID {
         return Ok(None);
     }
@@ -100,8 +99,9 @@ fn read_trimmed(path: &Path) -> io::Result<String> {
     Ok(fs::read_to_string(path)?.trim().to_owned())
 }
 
-fn read_hex(path: &Path) -> Option<u16> {
-    u16::from_str_radix(&read_trimmed(path).ok()?, 16).ok()
+fn read_hex(path: &Path) -> io::Result<u16> {
+    u16::from_str_radix(&read_trimmed(path)?, 16)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
 fn node_number(path: &Path) -> (u32, PathBuf) {
@@ -199,5 +199,30 @@ mod tests {
     fn missing_sysfs_means_no_cameras() {
         let found = list_in(Path::new("/nonexistent/video4linux"), Path::new("/dev")).unwrap();
         assert!(found.is_empty());
+    }
+
+    #[test]
+    fn explicit_lookup_preserves_inspection_errors() {
+        let sys = FakeSys::new("find-errors");
+        sys.add("video0", "0", "2e1a", "4c04", &link_descriptors());
+        let node = sys.0.join("video0");
+        fs::write(&node, "").unwrap();
+        let id = DeviceId::new(node.to_str().unwrap());
+        let class = sys.0.join("class");
+        assert!(find_in(&id, &class).is_ok());
+        for file in ["descriptors", "idVendor", "idProduct"] {
+            let path = sys.0.join("usb/video0").join(file);
+            let original = fs::read(&path).unwrap();
+            fs::remove_file(&path).unwrap();
+            fs::create_dir(&path).unwrap();
+            let err = find_in(&id, &class).unwrap_err();
+            assert!(
+                matches!(err, Error::Io { source, .. } if source.raw_os_error() == Some(libc::EISDIR))
+            );
+            fs::remove_dir(&path).unwrap();
+            fs::write(&path, original).unwrap();
+        }
+        fs::write(sys.0.join("usb/video0/idVendor"), "046d").unwrap();
+        assert!(matches!(find_in(&id, &class), Err(Error::NotALink(_))));
     }
 }

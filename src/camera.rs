@@ -1,8 +1,8 @@
 //! The [`Camera`] handle.
 
-use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::io;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -36,14 +36,24 @@ const WRITE_GAP: Duration = Duration::from_millis(2);
 ///
 /// Opening a camera does not start streaming and does not take it away from
 /// other programs, so it can be controlled while a video call is using it.
+///
+/// A camera can be shared between threads, for example in an
+/// [`Arc`](std::sync::Arc), and each call is safe from any of them: vendor
+/// writes still keep their minimum spacing. Calls from different threads may
+/// interleave, though, so when two threads change the same setting at once
+/// either value can win, and a write may be reported as [`Error::NotApplied`]
+/// if another overtakes it. Use a [`Mutex`] to run a sequence of calls without
+/// interruption.
 pub struct Camera {
     transport: Box<dyn Transport>,
     info: DeviceInfo,
     /// When the last vendor write was sent. It starts at the moment the camera
-    /// is opened, because another program may have written just before.
-    last_write: Cell<Instant>,
+    /// is opened, because another program may have written just before. Held
+    /// for the whole of a write, so that writes from different threads keep
+    /// their spacing too.
+    last_write: Mutex<Instant>,
     /// Payload lengths the camera has reported, by unit id and selector.
-    lens: RefCell<HashMap<(u8, u8), u16>>,
+    lens: Mutex<HashMap<(u8, u8), u16>>,
 }
 
 impl Camera {
@@ -68,8 +78,8 @@ impl Camera {
         Ok(Self {
             transport,
             info,
-            last_write: Cell::new(Instant::now()),
-            lens: RefCell::default(),
+            last_write: Mutex::new(Instant::now()),
+            lens: Mutex::default(),
         })
     }
 
@@ -79,8 +89,8 @@ impl Camera {
         Self {
             transport: Box::new(transport),
             info,
-            last_write: Cell::new(Instant::now()),
-            lens: RefCell::default(),
+            last_write: Mutex::new(Instant::now()),
+            lens: Mutex::default(),
         }
     }
 
@@ -171,6 +181,13 @@ impl Camera {
         }
     }
 
+    /// The remembered payload lengths. They stay valid even if a thread
+    /// panicked while holding them, as every change is a single insert or
+    /// remove.
+    fn lens(&self) -> MutexGuard<'_, HashMap<(u8, u8), u16>> {
+        self.lens.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn xu_len_raw(&self, unit_id: u8, selector: u8) -> io::Result<u16> {
         let mut len = [0u8; 2];
         self.transport
@@ -182,11 +199,11 @@ impl Camera {
     /// while the camera is connected, so it is asked for once and remembered.
     fn xu_len(&self, unit_id: u8, selector: u8) -> io::Result<u16> {
         let key = (unit_id, selector);
-        if let Some(&len) = self.lens.borrow().get(&key) {
+        if let Some(&len) = self.lens().get(&key) {
             return Ok(len);
         }
         let len = self.xu_len_raw(unit_id, selector)?;
-        self.lens.borrow_mut().insert(key, len);
+        self.lens().insert(key, len);
         Ok(len)
     }
 
@@ -202,7 +219,7 @@ impl Camera {
     ) -> io::Result<()> {
         let result = self.transport.xu_query(unit_id, selector, query, data);
         if result.is_err() {
-            self.lens.borrow_mut().remove(&(unit_id, selector));
+            self.lens().remove(&(unit_id, selector));
         }
         result
     }
@@ -258,11 +275,15 @@ impl Camera {
             )));
         }
         let mut data = data.to_vec();
-        sleep(WRITE_GAP.saturating_sub(self.last_write.get().elapsed()));
+        let mut last_write = self
+            .last_write
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        sleep(WRITE_GAP.saturating_sub(last_write.elapsed()));
         let written = self
             .xu_value_query(unit_id, selector.id, XuQuery::SetCur, &mut data)
             .map_err(|err| Error::io(context(), err));
-        self.last_write.set(Instant::now());
+        *last_write = Instant::now();
         written
     }
 
@@ -361,9 +382,9 @@ mod tests {
     use crate::testing::FakeCamera;
 
     #[test]
-    fn camera_can_move_to_another_thread() {
-        fn assert_send<T: Send>() {}
-        assert_send::<Camera>();
+    fn camera_can_be_shared_between_threads() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Camera>();
     }
 
     #[test]
@@ -412,6 +433,28 @@ mod tests {
         camera.xu_write(control::VIEW_STATE, &[2, 0]).unwrap();
         assert!(start.elapsed() >= WRITE_GAP * 2);
         assert_eq!(fake.xu_writes().len(), 2);
+    }
+
+    #[test]
+    fn writes_from_several_threads_are_spaced_apart() {
+        let fake = FakeCamera::new().selector(control::VIEW_STATE, &[0, 0]);
+        let start = Instant::now();
+        let camera = std::sync::Arc::new(fake.camera());
+        let threads: Vec<_> = (0..3)
+            .map(|i| {
+                let camera = std::sync::Arc::clone(&camera);
+                std::thread::spawn(move || {
+                    for _ in 0..2 {
+                        camera.xu_write(control::VIEW_STATE, &[i, 0]).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert!(start.elapsed() >= WRITE_GAP * 6);
+        assert_eq!(fake.xu_writes().len(), 6);
     }
 
     #[test]
